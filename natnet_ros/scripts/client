@@ -23,6 +23,7 @@ from visualization_msgs.msg import Marker
 
 import natnet
 from natnet_msgs.msg import MarkerList
+import numpy as np
 
 
 class RosLogger(natnet.Logger):
@@ -67,6 +68,9 @@ class NatnetClientNode(object):
         self.client = None  # type: natnet.comms.Client
         self.mocap_frame = rospy.get_param('~mocap_frame', 'mocap')
         self.tf_remap = rospy.get_param('~tf_remap', {})  # type: dict
+        self.z_up = rospy.get_param('~z_up', True)  # type: bool
+        self.Rq = np.array([[0.7071068, 0.0, 0.0, 0.7071068], [0.0, 0.7071068, -0.7071068, 0.0], [0.0, 0.7071068, 0.7071068, 0.0], [-0.7071068, 0.0, 0.0, 0.7071068]])
+        self.Rt = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
 
     def model_definitions_callback(self, rigid_bodies, skeletons, markersets):
         # TODO: Make sure it's ok to just throw publishers away like this
@@ -99,8 +103,12 @@ class NatnetClientNode(object):
         for b in rigid_bodies:
             message = PoseStamped()
             message.header = header
-            message.pose.position = Point(*b.position)
-            message.pose.orientation = Quaternion(*b.orientation)
+            if self.z_up:
+                message.pose.position = Point(*(self.Rt.dot(np.array(b.position))))
+                message.pose.orientation = Quaternion(*(self.Rq.dot(np.array(b.orientation))))
+            else:
+                message.pose.position = Point(*b.position)
+                message.pose.orientation = Quaternion(*b.orientation)
             try:
                 self.rigid_body_pubs[b.id_].publish(message)
             except KeyError:
@@ -116,8 +124,12 @@ class NatnetClientNode(object):
                 if child_frame in self.tf_remap:
                     child_frame = self.tf_remap[child_frame]
                 message.child_frame_id = child_frame
-                message.transform.translation = Vector3(*b.position)
-                message.transform.rotation = Quaternion(*b.orientation)
+                if self.z_up:
+                    message.transform.translation = Vector3(*(self.Rt.dot(np.array(b.position))))
+                    message.transform.rotation = Quaternion(*(self.Rq.dot(np.array(b.orientation))))
+                else:
+                    message.transform.translation = Vector3(*b.position)
+                    message.transform.rotation = Quaternion(*b.orientation)
                 self.tf_broadcaster.sendTransformMessage(message)
             except KeyError:
                 print('Unknown rigid body {}'.format(b.id_))
@@ -129,7 +141,12 @@ class NatnetClientNode(object):
         message.ns = 'natnet_ros'
         message.id = 0
         message.type = Marker.SPHERE_LIST
-        positions = [Point(*m.position) for m in markers]
+        if self.z_up:
+            positions = [Point(*(self.Rt.dot(np.array(m.position)))) for m in markers]
+        else:
+            positions = [Point(*m.position) for m in markers]
+
+
         message.points = positions
         sizes = [m.size for m in markers]
         mean_size = sum(sizes) / len(sizes)
@@ -154,7 +171,10 @@ class NatnetClientNode(object):
                     try:
                         message = PointStamped()
                         message.header = header
-                        message.point = Point(*m.position)
+                        if self.z_up:
+                            message.point = Point(*(self.Rt.dot(np.array(m.position))))
+                        else:
+                            message.point = Point(*m.position)
                         marker_pub = self.marker_pubs[(rigid_body_id, m.marker_id)]
                         marker_pub.publish(message)
 
